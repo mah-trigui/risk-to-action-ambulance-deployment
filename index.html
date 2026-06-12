@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Risk to Action Ambulance Deployment</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="hero">
+    <div class="container">
+      <h1>Your Model Predicts Risk. Operations Needs Actions.</h1>
+      <p class="subtitle">
+        Translating crash-risk predictions into ambulance deployment decisions in Nairobi
+      </p>
+      <div class="hero-buttons">
+        <a href="https://github.com/mah-trigui/risk-to-action-ambulance-deployment" class="btn primary">View Repository</a>
+        <a href="#idea" class="btn secondary">Explore Method</a>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <section class="section">
+      <div class="container">
+        <h2>Overview</h2>
+        <p>
+          This project addresses a city-scale ambulance deployment problem in Nairobi. The task was to place 6 ambulances every 3 hours in locations that would minimize response distance to future traffic crashes.
+        </p>
+        <p>
+          The key design decision was to separate the system into two different layers:
+        </p>
+        <ul class="clean-list">
+          <li><strong>prediction layer:</strong> estimate crash probability for each road segment and time window</li>
+          <li><strong>decision layer:</strong> convert the resulting risk surface into 6 deployable ambulance positions</li>
+        </ul>
+        <p>
+          Instead of trying to predict coordinates directly, the system first estimated where crashes were likely, then translated those predictions into an operational plan.
+        </p>
+      </div>
+    </section>
+
+    <section class="section alt">
+      <div class="container">
+        <h2>Architecture</h2>
+        <img src="images/architecture.jpg" alt="Crash risk to ambulance deployment architecture" class="architecture-image" />
+      </div>
+    </section>
+
+    <section class="section" id="idea">
+      <div class="container">
+        <h2>The Core Idea</h2>
+        <p>
+          A predictive model is not the same thing as a decision system.
+        </p>
+        <p>
+          The model output in this project was a probability:
+        </p>
+        <div class="metric-box">
+          <p><strong>P(crash | road segment, 3-hour window)</strong></p>
+        </div>
+        <p>
+          But the operational output needed by the system was completely different:
+        </p>
+        <div class="metric-box">
+          <p><strong>6 latitude/longitude positions for ambulances</strong></p>
+        </div>
+        <p>
+          The value came from building the translation layer between those two spaces: from risk estimation to constrained deployment.
+        </p>
+      </div>
+    </section>
+
+    <section class="section alt">
+      <div class="container">
+        <h2>System Decomposition</h2>
+        <div class="grid">
+          <div class="card">
+            <h3>Stage 1 — Crash prediction</h3>
+            <p>
+              Nairobi was decomposed into road segments, and an analytical base table was created at the segment × 3-hour window level. A binary model then estimated the likelihood of at least one crash in each slot.
+            </p>
+          </div>
+          <div class="card">
+            <h3>Stage 2 — Deployment translation</h3>
+            <p>
+              The highest-risk segments for each time window were selected, then clustered into 6 geographic groups so ambulance positions could be placed at cluster centroids.
+            </p>
+          </div>
+          <div class="card">
+            <h3>Why this matters</h3>
+            <p>
+              Prediction produces a risk surface. Operations needs a small set of actions under resource constraints. Those are related, but they are not the same object.
+            </p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="container">
+        <h2>Analytical Base Table Design</h2>
+        <p>
+          The city was transformed into a tabular prediction problem by building one row per:
+        </p>
+        <ul class="clean-list">
+          <li>road segment</li>
+          <li>3-hour time window</li>
+        </ul>
+        <p>
+          This converted a spatial deployment problem into a structured binary classification task.
+        </p>
+        <p>
+          Features were then fused from multiple sources:
+        </p>
+        <ul class="clean-list">
+          <li><strong>crash history:</strong> segment counts, seasonal medians, recent crash elasticity</li>
+          <li><strong>road survey:</strong> 228 obfuscated attributes compressed with t-SNE</li>
+          <li><strong>Uber Movement:</strong> segment-level speed aggregated into 3-hour windows</li>
+          <li><strong>weather:</strong> humidity, temperature, wind, precipitable water</li>
+          <li><strong>temporal context:</strong> weekends, holidays, hour groups</li>
+          <li><strong>spatial context:</strong> geographic segment clusters</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="section alt">
+      <div class="container">
+        <h2>Selected Code Snippets</h2>
+
+        <h3>1. Build the segment × time analytical base table</h3>
+        <pre>
+# one row per road segment × 3-hour window
+abt <- as.data.table(sqldf(
+    "SELECT a.*, b.segment_id
+     FROM abt a CROSS JOIN seg_ids b"
+))
+        </pre>
+
+        <h3>2. Crash elasticity as temporal trend feature</h3>
+        <pre>
+elastic[, diff := (nb_crash_monthly - shift(nb_crash_monthly)) /
+    pmax(shift(nb_crash_monthly), 1),
+by = segment_id]
+        </pre>
+
+        <h3>3. Simulate future Uber speeds for the test period</h3>
+        <pre>
+trend_ratio <- mean(uber_2019_h1$speed, na.rm = TRUE) /
+    mean(uber_2018_h1$speed, na.rm = TRUE)
+
+uber_future <- copy(uber_2018_h2)
+uber_future[, year := 2019L]
+uber_future[, speed := speed * trend_ratio]
+        </pre>
+
+        <h3>4. Convert risk map into ambulance deployment</h3>
+        <pre>
+hotspots <- window_preds[order(-pred)][1:top_k]
+
+km <- kmeans(
+    hotspots[, .(lat_mid, long_mid)],
+    centers = NUM_AMBULANCES,
+    nstart = 10,
+    iter.max = 100
+)
+
+ambulance_pos <- as.data.table(km$centers)
+        </pre>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="container">
+        <h2>Why this project is interesting</h2>
+        <ul class="clean-list">
+          <li>shows how a predictive model can feed an operational decision layer</li>
+          <li>separates score-space from action-space</li>
+          <li>demonstrates how to convert large risk maps into small deployable plans</li>
+          <li>combines machine learning, spatial reasoning, and resource allocation</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="section alt">
+      <div class="container">
+        <h2>Where this pattern generalizes</h2>
+        <ul class="clean-list">
+          <li>fraud risk scoring vs investigation queue allocation</li>
+          <li>hospital risk prediction vs staffing assignment</li>
+          <li>demand forecasting vs inventory placement</li>
+          <li>outage prediction vs field crew dispatch</li>
+        </ul>
+        <p>
+          The recurring pattern is the same: the output of the model is not yet the output of the operating system.
+        </p>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="container">
+        <h2>Key Takeaway</h2>
+        <div class="metric-box">
+          <p><strong>Your model predicts risk. Operations needs actions.</strong></p>
+          <p>
+            Real-world ML systems become useful when a decision layer translates predictions into constrained operational choices.
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <section class="section alt">
+      <div class="container">
+        <h2>Public Repository Scope</h2>
+        <p>
+          This public version focuses on the crash-risk modeling architecture, the translation from prediction to deployment, and selected implementation details. Competition data files are not included.
+        </p>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <div class="container">
+      <p>Built as a public project showcase for risk-to-action system design in applied machine learning.</p>
+    </div>
+  </footer>
+</body>
+</html>
